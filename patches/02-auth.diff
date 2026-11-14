@@ -1,0 +1,89 @@
+--- a/app/vuln_app.py
++++ b/app/vuln_app.py
+@@ -1,18 +1,36 @@
+ """
+ VULN_APP — намеренно уязвимое приложение для учебной лабораторной работы.
+ НЕ ИСПОЛЬЗОВАТЬ В ПРОДАКШЕНЕ. Запускать только локально (127.0.0.1).
+ """
+ import sqlite3
+-import hashlib
+-import secrets
+-from flask import Flask, request, jsonify, g
++import secrets
++import time
++from collections import defaultdict
++from flask import Flask, request, jsonify, g
++from werkzeug.security import generate_password_hash, check_password_hash
+
+ DB_PATH = "lab.db"
+ app = Flask(__name__)
+ app.config["SECRET_KEY"] = "dev-key-not-for-prod"
+
++# Rate limit: не более 5 попыток в 60 секунд на ключ (ip+username)
++LOGIN_WINDOW = 60
++LOGIN_MAX_ATTEMPTS = 5
++_login_attempts = defaultdict(list)
++
++
++def _rate_limit_ok(key: str) -> bool:
++    now = time.time()
++    attempts = _login_attempts[key]
++    # выкидываем старые
++    attempts[:] = [t for t in attempts if now - t < LOGIN_WINDOW]
++    if len(attempts) >= LOGIN_MAX_ATTEMPTS:
++        return False
++    attempts.append(now)
++    return True
++
+
+ def get_db():
+     if "db" not in g:
+@@ -30,15 +48,17 @@ def init_db():
+             username TEXT UNIQUE NOT NULL,
+-            password TEXT NOT NULL,
++            password TEXT NOT NULL,
+             role TEXT NOT NULL DEFAULT 'user'
+         );
+     """)
+     seed = [
+         ("alice", "alice_password_123", "user"),
+         ("bob",   "bob_password_456",   "user"),
+         ("admin", "S3cr3tAdm1n!",       "admin"),
+     ]
+-    cur.executemany("INSERT INTO users(username, password, role) VALUES (?,?,?)", seed)
++    cur.executemany(
++        "INSERT INTO users(username, password, role) VALUES (?,?,?)",
++        [(u, generate_password_hash(p), r) for u, p, r in seed],
++    )
+     conn.commit()
+     conn.close()
+
+@@ -58,13 +78,24 @@ def login():
+     username = data.get("username", "")
+     password = data.get("password", "")
+
++    rl_key = f"{request.remote_addr}|{username}"
++    if not _rate_limit_ok(rl_key):
++        return jsonify({"ok": False, "error": "too many attempts"}), 429
++
+     db = get_db()
+     row = db.execute(
+-        "SELECT id, username, role FROM users "
+-        "WHERE username = ? AND password = ?",
+-        (username, password),
++        "SELECT id, username, password, role FROM users WHERE username = ?",
++        (username,),
+     ).fetchone()
+
+-    if row:
++    if row and check_password_hash(row["password"], password):
+         return jsonify({
+             "ok": True,
+@@ -84,7 +115,7 @@ def register():
+     try:
+         db.execute(
+             "INSERT INTO users(username, password, role) VALUES (?,?,?)",
+-            (username, password, "user"),
++            (username, generate_password_hash(password), "user"),
+         )
+         db.commit()
