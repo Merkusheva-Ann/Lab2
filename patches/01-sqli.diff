@@ -1,0 +1,21 @@
+--- a/app/vuln_app.py
++++ b/app/vuln_app.py
+@@ -58,13 +58,11 @@ def login():
+     username = data.get("username", "")
+     password = data.get("password", "")
+
+     db = get_db()
+-    query = (
+-        f"SELECT id, username, role FROM users "
+-        f"WHERE username = '{username}' AND password = '{password}'"
+-    )
+-    row = db.execute(query).fetchone()
++    # Параметризованный запрос — SQLi устранена
++    row = db.execute(
++        "SELECT id, username, role FROM users "
++        "WHERE username = ? AND password = ?",
++        (username, password),
++    ).fetchone()
+
+     if row:
+        
